@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sys
+from pathlib import Path
 
 from claude_swap import __version__, paths, printer
 from claude_swap.exceptions import ClaudeSwitchError
@@ -231,12 +232,36 @@ Examples:
         sys.exit(130)
 
 
+def _home_owner_uid() -> int | None:
+    """Return the uid owning the current home directory, or None if unknown."""
+    try:
+        return Path.home().stat().st_uid
+    except (OSError, RuntimeError):
+        return None
+
+
 def _guard_root(switcher: ClaudeAccountSwitcher) -> None:
-    """Refuse to run as root outside a container (shared by run/map/unmap)."""
-    if sys.platform != "win32":
-        if os.geteuid() == 0 and not switcher._is_running_in_container():
-            error("Error: Do not run this script as root (unless running in a container)")
-            sys.exit(1)
+    """Refuse to run as root against another user's home directory.
+
+    A real root login (root's own home) is fine. What is not is `sudo cswap`
+    with HOME still pointing at the invoking user's home: every credential and
+    config file cswap writes there becomes root-owned, and that user's later
+    `cswap` and `claude` runs can no longer read or replace them. Containers
+    are exempt, since they commonly run as root on a mounted home.
+    """
+    if sys.platform == "win32" or os.geteuid() != 0:
+        return
+    if switcher._is_running_in_container():
+        return
+    owner = _home_owner_uid()
+    if owner is None or owner == 0:
+        return
+    error(
+        f"Error: Running as root, but {Path.home()} belongs to another user — "
+        "files written there would become root-owned. Run without sudo, or "
+        "as root with root's own home directory."
+    )
+    sys.exit(1)
 
 
 def _map_command(argv: list[str]) -> None:
@@ -706,10 +731,7 @@ Defaults live in settings.json in the backup root; flags override them.
 
     try:
         switcher = ClaudeAccountSwitcher(debug=args.debug)
-        if sys.platform != "win32":
-            if os.geteuid() == 0 and not switcher._is_running_in_container():
-                error("Error: Do not run this script as root (unless running in a container)")
-                sys.exit(1)
+        _guard_root(switcher)
 
         settings = merged_with_cli(load_settings(switcher.backup_dir), args)
         engine = AutoSwitchEngine(
@@ -828,10 +850,7 @@ Examples:
 
     try:
         switcher = ClaudeAccountSwitcher(debug=args.debug)
-        if sys.platform != "win32":
-            if os.geteuid() == 0 and not switcher._is_running_in_container():
-                error("Error: Do not run this script as root (unless running in a container)")
-                sys.exit(1)
+        _guard_root(switcher)
         root = switcher.backup_dir
 
         if action == "path":
@@ -1401,11 +1420,7 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     try:
         switcher = ClaudeAccountSwitcher(debug=args.debug)
 
-        # Check for root (unless in container) - POSIX only
-        if sys.platform != "win32":
-            if os.geteuid() == 0 and not switcher._is_running_in_container():
-                error("Error: Do not run this script as root (unless running in a container)")
-                sys.exit(1)
+        _guard_root(switcher)
 
         if args.add_account:
             switcher.add_account(slot=args.slot, alias=args.alias)

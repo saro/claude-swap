@@ -1377,6 +1377,7 @@ class TestMapCommand:
     def test_unmap_refuses_root(self, temp_home, capsys):
         self._seeded_switcher_env(temp_home)
         with patch("os.geteuid", return_value=0, create=True), \
+             patch("claude_swap.cli._home_owner_uid", return_value=1000), \
              patch.object(ClaudeAccountSwitcher, "_is_running_in_container", return_value=False):
             with pytest.raises(SystemExit) as exc:
                 cli._unmap_command([str(temp_home)])
@@ -1384,9 +1385,41 @@ class TestMapCommand:
         assert "root" in capsys.readouterr().err
 
     @pytest.mark.skipif(sys.platform == "win32", reason="root guard is POSIX-only")
+    @pytest.mark.parametrize("owner", [0, None])
+    def test_map_allows_root_in_own_home(self, temp_home, capsys, owner):
+        """A real root login (home owned by root, or unreadable) is allowed."""
+        self._seeded_switcher_env(temp_home)
+        with patch("os.geteuid", return_value=0, create=True), \
+             patch("claude_swap.cli._home_owner_uid", return_value=owner), \
+             patch.object(ClaudeAccountSwitcher, "_is_running_in_container", return_value=False):
+            cli._map_command([])
+        assert "root" not in capsys.readouterr().err
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="root guard is POSIX-only")
+    def test_root_guard_exempts_containers(self, temp_home, capsys):
+        self._seeded_switcher_env(temp_home)
+        with patch("os.geteuid", return_value=0, create=True), \
+             patch("claude_swap.cli._home_owner_uid", return_value=1000), \
+             patch.object(ClaudeAccountSwitcher, "_is_running_in_container", return_value=True):
+            cli._map_command([])
+        assert "root" not in capsys.readouterr().err
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="root guard is POSIX-only")
+    def test_main_refuses_root_in_another_users_home(self, temp_home, capsys):
+        with patch("os.geteuid", return_value=0, create=True), \
+             patch("claude_swap.cli._home_owner_uid", return_value=1000), \
+             patch.object(ClaudeAccountSwitcher, "_is_running_in_container", return_value=False), \
+             patch.object(sys, "argv", ["claude-swap", "--list"]):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+        assert exc.value.code == 1
+        assert "root" in capsys.readouterr().err
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="root guard is POSIX-only")
     def test_map_refuses_root(self, temp_home, capsys):
         self._seeded_switcher_env(temp_home)
         with patch("os.geteuid", return_value=0, create=True), \
+             patch("claude_swap.cli._home_owner_uid", return_value=1000), \
              patch.object(ClaudeAccountSwitcher, "_is_running_in_container", return_value=False):
             with pytest.raises(SystemExit) as exc:
                 cli._map_command(["2", str(temp_home)])
@@ -1498,6 +1531,7 @@ class TestAliasCommand:
     def test_alias_refuses_root(self, temp_home, capsys):
         self._seeded_switcher_env(temp_home)
         with patch("os.geteuid", return_value=0, create=True), \
+             patch("claude_swap.cli._home_owner_uid", return_value=1000), \
              patch.object(ClaudeAccountSwitcher, "_is_running_in_container", return_value=False):
             with pytest.raises(SystemExit) as exc:
                 cli._alias_command(["2", "dev"])
